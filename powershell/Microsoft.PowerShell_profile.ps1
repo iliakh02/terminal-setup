@@ -1,7 +1,8 @@
 using namespace System.Management.Automation
 using namespace System.Management.Automation.Language
  
-oh-my-posh --init --shell pwsh --config C:\\Terminal\\MyThemes\\ohmyposh-my-version.omp.json | Invoke-Expression
+# Theme lives in the repo next to this file
+oh-my-posh init pwsh --config (Join-Path $PSScriptRoot '..\oh-my-posh\ohmyposh-my-version.omp.json') | Invoke-Expression
 if ($host.Name -eq 'ConsoleHost')
 {
     Import-Module PSReadLine
