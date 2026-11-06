@@ -25,6 +25,8 @@ $TerminalSetupScriptPath = $PSCommandPath
 # Everything lives in one function so irm | iex does not leak
 # preferences or helpers into the caller's session.
 function Invoke-TerminalSetup {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Switches are read by nested functions')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = '-DryRun plays the role of -WhatIf')]
     [CmdletBinding()]
     param(
         [string]$ScriptPath,
@@ -255,7 +257,7 @@ function Invoke-TerminalSetup {
 
     # --- Configure steps (pwsh 7 only) ---------------------------------------
 
-    function Install-TerminalIcons {
+    function Install-TerminalIconsModule {
         if (Get-Module -ListAvailable -Name Terminal-Icons) {
             Write-Step SKIP 'Terminal-Icons' 'already installed'
             return
@@ -292,7 +294,7 @@ function Invoke-TerminalSetup {
         if ($current -match $pattern) {
             if ($Matches[0] -eq $block) { Write-Step SKIP 'Profile loader' "up to date in $profilePath"; return }
             # Keep anything the user added around the block
-            $new = [regex]::Replace($current, $pattern, { param($m) $block })
+            $new = [regex]::Replace($current, $pattern, { $block })
             $action = 'updated'
         }
         else {
@@ -321,7 +323,7 @@ function Invoke-TerminalSetup {
     }
 
     # Overlay wins for its own keys; machine-specific profiles and settings are kept
-    function Merge-TerminalSettings($Settings, $Overlay) {
+    function Merge-TerminalSetting($Settings, $Overlay) {
         foreach ($k in $Overlay.Keys) {
             if ($k -notin 'profiles', 'schemes', 'actions', 'keybindings') { $Settings[$k] = $Overlay[$k] }
         }
@@ -356,7 +358,7 @@ function Invoke-TerminalSetup {
         $Settings
     }
 
-    function Set-TerminalSettings([string]$Root) {
+    function Set-TerminalSetting([string]$Root) {
         $overlayPath = Join-Path $Root 'windows-terminal\settings.overlay.json'
         $paths = @(Get-TerminalSettingsPath)
         if (-not $paths) {
@@ -371,7 +373,7 @@ function Invoke-TerminalSetup {
                 # Parse again so the merge does not mutate $before
                 $settings = if ($raw.Trim()) { $raw | ConvertFrom-Json -AsHashtable } else { [ordered]@{} }
                 $overlay = Get-Content $overlayPath -Raw | ConvertFrom-Json -AsHashtable
-                $merged = ConvertTo-Json (Merge-TerminalSettings $settings $overlay) -Depth 32
+                $merged = ConvertTo-Json (Merge-TerminalSetting $settings $overlay) -Depth 32
                 if ($merged -eq $current) { Write-Step SKIP 'Windows Terminal' "up to date: $path"; continue }
                 if ($DryRun) { Write-Step DRY 'Windows Terminal' "would merge into $path"; continue }
                 $note = Backup-File $path
@@ -400,7 +402,7 @@ function Invoke-TerminalSetup {
         ($Text -replace '"(?:\\.|[^"\\])*"', '""') -match '//|/\*'
     }
 
-    function Set-VSCodeSettings([string]$Root) {
+    function Set-VSCodeSetting([string]$Root) {
         if ($SkipVSCode) { Write-Step SKIP 'VS Code' '-SkipVSCode'; return }
         $userDir = Join-Path $env:APPDATA 'Code\User'
         if (-not (Test-Path (Join-Path $env:APPDATA 'Code')) -and -not (Test-Command 'code')) {
@@ -436,16 +438,16 @@ function Invoke-TerminalSetup {
         Write-Step OK 'VS Code' ("merged into $path $note").Trim()
     }
 
-    function Invoke-ConfigureSteps([string]$Root) {
+    function Invoke-ConfigureStep([string]$Root) {
         Write-Header 'PowerShell 7'
-        Install-TerminalIcons
+        Install-TerminalIconsModule
         Install-ProfileLoader $Root
 
         Write-Header 'Windows Terminal'
-        Set-TerminalSettings $Root
+        Set-TerminalSetting $Root
 
         Write-Header 'VS Code'
-        Set-VSCodeSettings $Root
+        Set-VSCodeSetting $Root
     }
 
     # From Windows PowerShell 5.1: run the configure stage in pwsh 7 and
@@ -483,7 +485,7 @@ function Invoke-TerminalSetup {
 
     try {
         if ($Stage -eq 'Configure') {
-            Invoke-ConfigureSteps (Split-Path $ScriptPath -Parent)
+            Invoke-ConfigureStep (Split-Path $ScriptPath -Parent)
         }
         else {
             Write-Header 'Packages'
@@ -500,7 +502,7 @@ function Invoke-TerminalSetup {
             Write-Header 'Font'
             Install-NerdFont
 
-            if ($PSVersionTable.PSVersion.Major -ge 7) { Invoke-ConfigureSteps $root }
+            if ($PSVersionTable.PSVersion.Major -ge 7) { Invoke-ConfigureStep $root }
             else { Start-ConfigureInPwsh $root }
         }
     }
