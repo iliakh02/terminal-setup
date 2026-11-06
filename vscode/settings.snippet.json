@@ -1,0 +1,22 @@
+{
+    "editor.fontFamily": "'CaskaydiaCove NFM', Consolas, 'Courier New', monospace",
+    "terminal.integrated.fontFamily": "'CaskaydiaCove NFM'",
+    "[javascript]": {
+        "editor.tabSize": 2
+    },
+    "[javascriptreact]": {
+        "editor.tabSize": 2
+    },
+    "[typescript]": {
+        "editor.tabSize": 2
+    },
+    "[typescriptreact]": {
+        "editor.tabSize": 2
+    },
+    "[css]": {
+        "editor.tabSize": 2
+    },
+    "[scss]": {
+        "editor.tabSize": 2
+    }
+}
