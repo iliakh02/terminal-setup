@@ -125,10 +125,24 @@ function Invoke-TerminalSetup {
         return "backup: $dest"
     }
 
-    function Write-Utf8File([string]$Path, [string]$Text) {
+    function Write-Utf8File([string]$Path, [string]$Text, [switch]$NoBom) {
         $dir = Split-Path $Path -Parent
         if (-not (Test-Path $dir)) { $null = New-Item -ItemType Directory -Path $dir -Force }
-        [IO.File]::WriteAllText($Path, $Text, (New-Object Text.UTF8Encoding $true))
+        [IO.File]::WriteAllText($Path, $Text, (New-Object Text.UTF8Encoding (-not $NoBom)))
+    }
+
+    # Replaces items in $Existing whose $Key matches an item in $Incoming, appends the rest
+    function Merge-ById($Existing, $Incoming, [string]$Key) {
+        $list = New-Object System.Collections.Generic.List[object]
+        foreach ($e in @($Existing)) { if ($null -ne $e) { $list.Add($e) } }
+        foreach ($item in @($Incoming)) {
+            $idx = -1
+            for ($i = 0; $i -lt $list.Count; $i++) {
+                if ($list[$i] -is [Collections.IDictionary] -and $list[$i][$Key] -eq $item[$Key]) { $idx = $i; break }
+            }
+            if ($idx -ge 0) { $list[$idx] = $item } else { $list.Add($item) }
+        }
+        , $list.ToArray()
     }
 
     # --- Steps ----------------------------------------------------------------
@@ -292,10 +306,91 @@ function Invoke-TerminalSetup {
         Write-Step OK 'Profile loader' ("$action loader in $profilePath $note").Trim()
     }
 
+    function Get-TerminalSettingsPath {
+        $candidates = @(
+            "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
+            "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json"
+            "$env:LOCALAPPDATA\Microsoft\Windows Terminal\settings.json"
+        )
+        $found = @($candidates | Where-Object { Test-Path $_ })
+        # Installed but never launched: seed the Store location, WT adds the rest on first start
+        if (-not $found -and (Get-AppxPackage -Name 'Microsoft.WindowsTerminal' -ErrorAction SilentlyContinue)) {
+            $found = @($candidates[0])
+        }
+        $found
+    }
+
+    # Overlay wins for its own keys; machine-specific profiles and settings are kept
+    function Merge-TerminalSettings($Settings, $Overlay) {
+        foreach ($k in $Overlay.Keys) {
+            if ($k -notin 'profiles', 'schemes', 'actions', 'keybindings') { $Settings[$k] = $Overlay[$k] }
+        }
+        $Settings['schemes'] = Merge-ById $Settings['schemes'] $Overlay['schemes'] 'name'
+
+        # Drop other bindings on the same keys so ours are not shadowed,
+        # including legacy actions that carry their own "keys"
+        $myKeys = @($Overlay['keybindings'] | ForEach-Object { $_['keys'] })
+        $myIds = @($Overlay['keybindings'] | ForEach-Object { $_['id'] })
+        $actions = @($Settings['actions'] | Where-Object { $null -ne $_ -and -not ($_.Contains('keys') -and $_['keys'] -in $myKeys) })
+        $Settings['actions'] = Merge-ById $actions $Overlay['actions'] 'id'
+        $kept = @($Settings['keybindings'] | Where-Object { $null -ne $_ -and -not ($_['keys'] -in $myKeys -and $_['id'] -notin $myIds) })
+        $Settings['keybindings'] = Merge-ById $kept $Overlay['keybindings'] 'id'
+
+        $profiles = $Settings['profiles']
+        if ($profiles -isnot [Collections.IDictionary]) {
+            # Legacy format: profiles is a plain list
+            $profiles = [ordered]@{ list = @($profiles | Where-Object { $null -ne $_ }) }
+            $Settings['profiles'] = $profiles
+        }
+        if ($profiles['defaults'] -isnot [Collections.IDictionary]) { $profiles['defaults'] = [ordered]@{} }
+        foreach ($k in $Overlay['profiles']['defaults'].Keys) { $profiles['defaults'][$k] = $Overlay['profiles']['defaults'][$k] }
+
+        $list = New-Object System.Collections.Generic.List[object]
+        foreach ($p in @($profiles['list'])) { if ($null -ne $p) { $list.Add($p) } }
+        foreach ($mine in $Overlay['profiles']['list']) {
+            $match = $list | Where-Object { $_['guid'] -eq $mine['guid'] } | Select-Object -First 1
+            if ($match) { foreach ($k in $mine.Keys) { $match[$k] = $mine[$k] } }
+            else { $list.Add($mine) }
+        }
+        $profiles['list'] = $list.ToArray()
+        $Settings
+    }
+
+    function Set-TerminalSettings([string]$Root) {
+        $overlayPath = Join-Path $Root 'windows-terminal\settings.overlay.json'
+        $paths = @(Get-TerminalSettingsPath)
+        if (-not $paths) {
+            Write-Step SKIP 'Windows Terminal' 'settings.json not found; start Windows Terminal once and run again'
+            return
+        }
+        foreach ($path in $paths) {
+            try {
+                $raw = if (Test-Path $path) { Get-Content $path -Raw } else { '' }
+                $before = if ($raw.Trim()) { $raw | ConvertFrom-Json -AsHashtable } else { [ordered]@{} }
+                $current = ConvertTo-Json $before -Depth 32
+                # Parse again so the merge does not mutate $before
+                $settings = if ($raw.Trim()) { $raw | ConvertFrom-Json -AsHashtable } else { [ordered]@{} }
+                $overlay = Get-Content $overlayPath -Raw | ConvertFrom-Json -AsHashtable
+                $merged = ConvertTo-Json (Merge-TerminalSettings $settings $overlay) -Depth 32
+                if ($merged -eq $current) { Write-Step SKIP 'Windows Terminal' "up to date: $path"; continue }
+                if ($DryRun) { Write-Step DRY 'Windows Terminal' "would merge into $path"; continue }
+                $note = Backup-File $path
+                Write-Utf8File $path $merged -NoBom
+                Write-Step OK 'Windows Terminal' ("merged into $path $note").Trim()
+            }
+            catch {
+                Write-Step FAIL 'Windows Terminal' "$path - $($_.Exception.Message)"
+            }
+        }
+    }
+
     function Invoke-ConfigureSteps([string]$Root) {
         Write-Header 'PowerShell 7'
         Install-TerminalIcons
         Install-ProfileLoader $Root
+
+        Write-Header 'Windows Terminal'
+        Set-TerminalSettings $Root
     }
 
     # From Windows PowerShell 5.1: run the configure stage in pwsh 7 and
