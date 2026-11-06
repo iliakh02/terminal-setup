@@ -1,0 +1,89 @@
+{
+    "$schema": "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/schema.json",
+    "blocks": [
+      {
+        "alignment": "left",
+        "segments": [
+          {
+            "background": "#4f4f4f",
+            "foreground": "#ffffff",
+            "powerline_symbol": "\ue0b4",
+            "leading_diamond": "\ue0b2",          
+            "style": "diamond",
+            "template": " {{ if .WSL }}WSL at {{ end }}{{.Icon}} ",
+            "type": "os"
+          },
+          {
+            "background": "#887345",
+            "foreground": "#ffffff",
+            "powerline_symbol": "\ue0b0",
+            "leading_diamond": "\ue0b2", 
+            "properties": {
+              "time_format": "15:04"
+            },
+            "style": "diamond",
+            "template": " {{ if eq \"False\" (title (default \"False\" .Env.DISABLE_SEGMENT_DTIME)) }}\uf43a {{ .CurrentDate | date .Format }}{{ end }} ",
+            "type": "time"
+          },
+          {
+            "background": "#003358",
+            "foreground": "#ffffff",
+            "powerline_symbol": "\ue0b0",
+            "properties": {
+              "style": "folder"
+            },
+            "style": "powerline",
+            "template": " \uf07b  {{ .Path }} ",
+            "type": "path"
+          },
+          {
+            "background": "#ffd500",
+            "background_templates": [
+              "{{ if or (.Working.Changed) (.Staging.Changed) }}#FFA723{{ end }}",
+              "{{ if and (gt .Ahead 0) (gt .Behind 0) }}#FFEB3B{{ end }}",
+              "{{ if gt .Ahead 0 }}#B388FF{{ end }}",
+              "{{ if gt .Behind 0 }}#B388FF{{ end }}"
+            ],
+            "foreground": "#193549",
+            "powerline_symbol": "\ue0b0",
+            "properties": {
+              "fetch_stash_count": true,
+              "fetch_status": true,
+              "fetch_upstream_icon": true
+            },
+            "style": "powerline",
+            "template": " {{ .HEAD }} {{ .BranchStatus }}{{ if .Working.Changed }} \uf044 {{ .Working.String }}{{ end }}{{ if and (.Staging.Changed) (.Working.Changed) }} |{{ end }}{{ if .Staging.Changed }} \uf046 {{ .Staging.String }}{{ end }}{{ if gt .StashCount 0}} \uf692 {{ .StashCount }}{{ end }}{{ if gt .WorktreeCount 0}} \uf1bb {{ .WorktreeCount }}{{ end }} ",
+            "type": "git"
+          },
+          {
+            "background": "#5b007c",
+            "foreground": "#ffffff",
+            "powerline_symbol": "\ue0b0",
+            "properties": {
+              "fetch_version": true
+            },
+            "style": "powerline",
+            "template": " \ue70c {{ if .Unsupported }}\uf071{{ else }}{{ .Full }}{{ end }} ",
+            "type": "dotnet"
+          },
+          {
+            "background": "#067d00",
+            "background_templates": [
+              "{{ if gt .Code 0 }}#ff0000{{ end }}"
+            ],
+            "foreground": "#ffffff",
+            "powerline_symbol": "\ue0b0",
+            "properties": {
+              "always_enabled": true
+            },
+            "style": "powerline",
+            "template": " {{ if gt .Code 0 }}\ue23a{{ else }}\ue23a{{ end }} ",
+            "type": "status"
+          }
+        ],
+        "type": "prompt"
+      }
+    ],
+    "final_space": true,
+    "version": 2
+  }
