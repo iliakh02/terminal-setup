@@ -14,7 +14,9 @@ param(
     [switch]$SkipVSCode,
     [switch]$SkipFonts,
     [switch]$NoBackup,
-    [switch]$DryRun
+    [switch]$DryRun,
+    # Internal: 'Configure' is the second half, re-run under pwsh 7
+    [ValidateSet('All', 'Configure')][string]$Stage = 'All'
 )
 
 # Captured before entering the function; empty when run via irm | iex
@@ -29,7 +31,8 @@ function Invoke-TerminalSetup {
         [switch]$SkipVSCode,
         [switch]$SkipFonts,
         [switch]$NoBackup,
-        [switch]$DryRun
+        [switch]$DryRun,
+        [string]$Stage
     )
 
     Set-StrictMode -Version 2
@@ -42,6 +45,8 @@ function Invoke-TerminalSetup {
     $RepoDir = Join-Path $HOME 'terminal-setup'
     $FontName = 'CascadiaCode'
     $FontFamily = 'CaskaydiaCove NF'
+    $BlockStart = '# >>> terminal-setup >>>'
+    $BlockEnd = '# <<< terminal-setup <<<'
 
     $Results = New-Object System.Collections.Generic.List[object]
 
@@ -110,6 +115,20 @@ function Invoke-TerminalSetup {
         Add-Type -AssemblyName System.Drawing
         $fonts = New-Object System.Drawing.Text.InstalledFontCollection
         [bool]($fonts.Families | Where-Object { $_.Name -eq $Family })
+    }
+
+    # Copies a file to <name>.bak-<timestamp>; returns a note for the step output
+    function Backup-File([string]$Path) {
+        if ($NoBackup -or -not (Test-Path $Path)) { return '' }
+        $dest = '{0}.bak-{1}' -f $Path, (Get-Date -Format 'yyyyMMdd-HHmmss')
+        Copy-Item -LiteralPath $Path -Destination $dest -Force
+        return "backup: $dest"
+    }
+
+    function Write-Utf8File([string]$Path, [string]$Text) {
+        $dir = Split-Path $Path -Parent
+        if (-not (Test-Path $dir)) { $null = New-Item -ItemType Directory -Path $dir -Force }
+        [IO.File]::WriteAllText($Path, $Text, (New-Object Text.UTF8Encoding $true))
     }
 
     # --- Steps ----------------------------------------------------------------
@@ -220,33 +239,132 @@ function Invoke-TerminalSetup {
         else { Write-Step FAIL 'Nerd Font' "oh-my-posh exit code $LASTEXITCODE" }
     }
 
+    # --- Configure steps (pwsh 7 only) ---------------------------------------
+
+    function Install-TerminalIcons {
+        if (Get-Module -ListAvailable -Name Terminal-Icons) {
+            Write-Step SKIP 'Terminal-Icons' 'already installed'
+            return
+        }
+        if ($DryRun) { Write-Step DRY 'Terminal-Icons' 'would install from PSGallery (CurrentUser)'; return }
+        # PSResourceGet ships with pwsh 7.4+ and needs no NuGet provider
+        if (Get-Command Install-PSResource -ErrorAction SilentlyContinue) {
+            Install-PSResource -Name Terminal-Icons -Repository PSGallery -Scope CurrentUser -TrustRepository -Quiet
+        }
+        else {
+            if (-not (Get-PackageProvider -ListAvailable -Name NuGet -ErrorAction SilentlyContinue)) {
+                $null = Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Scope CurrentUser -Force
+            }
+            Install-Module -Name Terminal-Icons -Repository PSGallery -Scope CurrentUser -Force -AllowClobber
+        }
+        Write-Step OK 'Terminal-Icons' 'installed for current user'
+    }
+
+    function Install-ProfileLoader([string]$Root) {
+        # Console host profile; CurrentUserAllHosts resolves the real
+        # Documents folder, including OneDrive redirection.
+        $profilePath = Join-Path (Split-Path $PROFILE.CurrentUserAllHosts -Parent) 'Microsoft.PowerShell_profile.ps1'
+        $repoProfile = Join-Path $Root 'powershell\Microsoft.PowerShell_profile.ps1'
+        $block = @(
+            $BlockStart
+            '# Managed by terminal-setup (install.ps1). Changes inside this block are overwritten.'
+            ('$TerminalSetupProfile = ''{0}''' -f $repoProfile.Replace("'", "''"))
+            'if (Test-Path $TerminalSetupProfile) { . $TerminalSetupProfile }'
+            $BlockEnd
+        ) -join "`r`n"
+
+        $current = if (Test-Path $profilePath) { [IO.File]::ReadAllText($profilePath) } else { '' }
+        $pattern = '(?s)' + [regex]::Escape($BlockStart) + '.*?' + [regex]::Escape($BlockEnd)
+        if ($current -match $pattern) {
+            if ($Matches[0] -eq $block) { Write-Step SKIP 'Profile loader' "up to date in $profilePath"; return }
+            # Keep anything the user added around the block
+            $new = [regex]::Replace($current, $pattern, { param($m) $block })
+            $action = 'updated'
+        }
+        else {
+            # Old full profile is replaced: its content now lives in the repo
+            $new = $block + "`r`n"
+            $action = if ($current.Trim()) { 'replaced old profile with' } else { 'created' }
+        }
+        if ($DryRun) { Write-Step DRY 'Profile loader' "would write $profilePath ($action loader)"; return }
+        $note = Backup-File $profilePath
+        Write-Utf8File $profilePath $new
+        Write-Step OK 'Profile loader' ("$action loader in $profilePath $note").Trim()
+    }
+
+    function Invoke-ConfigureSteps([string]$Root) {
+        Write-Header 'PowerShell 7'
+        Install-TerminalIcons
+        Install-ProfileLoader $Root
+    }
+
+    # From Windows PowerShell 5.1: run the configure stage in pwsh 7 and
+    # collect its results for one combined summary.
+    function Start-ConfigureInPwsh([string]$Root) {
+        $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+        if (-not $pwsh) {
+            if ($DryRun) { Write-Step DRY 'PowerShell 7 stage' 'would continue in pwsh after it is installed' }
+            else { Write-Step FAIL 'PowerShell 7 stage' 'pwsh not found; open a new terminal and run install.ps1 again' }
+            return
+        }
+        $resultFile = Join-Path ([IO.Path]::GetTempPath()) "terminal-setup-$([guid]::NewGuid().ToString('N')).json"
+        $pwshArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'install.ps1'), '-Stage', 'Configure')
+        if ($SkipVSCode) { $pwshArgs += '-SkipVSCode' }
+        if ($SkipFonts) { $pwshArgs += '-SkipFonts' }
+        if ($NoBackup) { $pwshArgs += '-NoBackup' }
+        if ($DryRun) { $pwshArgs += '-DryRun' }
+        $env:TERMINAL_SETUP_RESULTS = $resultFile
+        try { & $pwsh.Source @pwshArgs }
+        finally { Remove-Item Env:\TERMINAL_SETUP_RESULTS -ErrorAction SilentlyContinue }
+        if (Test-Path $resultFile) {
+            foreach ($r in @(Get-Content $resultFile -Raw | ConvertFrom-Json)) { $Results.Add($r) }
+            Remove-Item $resultFile -Force
+        }
+        else {
+            Write-Step FAIL 'PowerShell 7 stage' "pwsh exited with code $LASTEXITCODE"
+        }
+    }
+
     # --- Main -----------------------------------------------------------------
 
     # Windows PowerShell 5.1 may default to TLS 1.0
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
     try {
-        Write-Header 'Packages'
-        if (-not (Test-Winget)) { Write-Summary; return }
-        Install-WingetPackage -Id 'Microsoft.PowerShell' -Command 'pwsh'
-        Install-WingetPackage -Id 'Microsoft.WindowsTerminal' -AppxName 'Microsoft.WindowsTerminal*'
-        Install-WingetPackage -Id 'JanDeDobbeleer.OhMyPosh' -Command 'oh-my-posh'
-        Install-WingetPackage -Id 'Git.Git' -Command 'git'
-        Update-SessionPath
+        if ($Stage -eq 'Configure') {
+            Invoke-ConfigureSteps (Split-Path $ScriptPath -Parent)
+        }
+        else {
+            Write-Header 'Packages'
+            if (-not (Test-Winget)) { Write-Summary; return }
+            Install-WingetPackage -Id 'Microsoft.PowerShell' -Command 'pwsh'
+            Install-WingetPackage -Id 'Microsoft.WindowsTerminal' -AppxName 'Microsoft.WindowsTerminal*'
+            Install-WingetPackage -Id 'JanDeDobbeleer.OhMyPosh' -Command 'oh-my-posh'
+            Install-WingetPackage -Id 'Git.Git' -Command 'git'
+            Update-SessionPath
 
-        Write-Header 'Repository'
-        $null = Sync-Repo
+            Write-Header 'Repository'
+            $root = Sync-Repo
 
-        Write-Header 'Font'
-        Install-NerdFont
+            Write-Header 'Font'
+            Install-NerdFont
+
+            if ($PSVersionTable.PSVersion.Major -ge 7) { Invoke-ConfigureSteps $root }
+            else { Start-ConfigureInPwsh $root }
+        }
     }
     catch {
         Write-Step FAIL 'Unexpected error' $_.Exception.Message
     }
 
+    # Child configure stage hands results back to the 5.1 parent
+    if ($Stage -eq 'Configure' -and $env:TERMINAL_SETUP_RESULTS) {
+        ConvertTo-Json -InputObject $Results.ToArray() | Set-Content -Path $env:TERMINAL_SETUP_RESULTS -Encoding UTF8
+        return
+    }
     Write-Summary
 }
 
-Invoke-TerminalSetup -ScriptPath $TerminalSetupScriptPath -SkipVSCode:$SkipVSCode -SkipFonts:$SkipFonts -NoBackup:$NoBackup -DryRun:$DryRun
+Invoke-TerminalSetup -ScriptPath $TerminalSetupScriptPath -SkipVSCode:$SkipVSCode -SkipFonts:$SkipFonts -NoBackup:$NoBackup -DryRun:$DryRun -Stage $Stage
 Remove-Item Function:\Invoke-TerminalSetup -ErrorAction SilentlyContinue
 Remove-Variable TerminalSetupScriptPath -ErrorAction SilentlyContinue

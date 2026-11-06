@@ -1,2 +1,5 @@
 # Raw source files used to build this repo (personal, not published)
 materials/
+
+# Backups written by install.ps1 (normally outside the repo)
+*.bak-*
