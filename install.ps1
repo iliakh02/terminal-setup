@@ -467,7 +467,8 @@ function Invoke-TerminalSetup {
         try { & $pwsh.Source @pwshArgs }
         finally { Remove-Item Env:\TERMINAL_SETUP_RESULTS -ErrorAction SilentlyContinue }
         if (Test-Path $resultFile) {
-            foreach ($r in @(Get-Content $resultFile -Raw | ConvertFrom-Json)) { $Results.Add($r) }
+            # 5.1 emits a JSON array as one object; ForEach-Object unrolls it
+            Get-Content $resultFile -Raw | ConvertFrom-Json | ForEach-Object { $_ } | ForEach-Object { $Results.Add($_) }
             Remove-Item $resultFile -Force
         }
         else {
