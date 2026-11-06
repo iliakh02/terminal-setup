@@ -384,6 +384,58 @@ function Invoke-TerminalSetup {
         }
     }
 
+    # Nested objects (e.g. "[javascript]") are merged key by key
+    function Merge-Dictionary($Target, $Source) {
+        foreach ($k in $Source.Keys) {
+            if ($Target.Contains($k) -and $Target[$k] -is [Collections.IDictionary] -and $Source[$k] -is [Collections.IDictionary]) {
+                $null = Merge-Dictionary $Target[$k] $Source[$k]
+            }
+            else { $Target[$k] = $Source[$k] }
+        }
+        $Target
+    }
+
+    function Test-JsonHasComment([string]$Text) {
+        # Ignore // and /* inside strings (URLs, globs)
+        ($Text -replace '"(?:\\.|[^"\\])*"', '""') -match '//|/\*'
+    }
+
+    function Set-VSCodeSettings([string]$Root) {
+        if ($SkipVSCode) { Write-Step SKIP 'VS Code' '-SkipVSCode'; return }
+        $userDir = Join-Path $env:APPDATA 'Code\User'
+        if (-not (Test-Path (Join-Path $env:APPDATA 'Code')) -and -not (Test-Command 'code')) {
+            Write-Step SKIP 'VS Code' 'not installed'
+            return
+        }
+        $path = Join-Path $userDir 'settings.json'
+        $snippetPath = Join-Path $Root 'vscode\settings.snippet.json'
+        $raw = if (Test-Path $path) { Get-Content $path -Raw } else { '' }
+        if (-not $raw) { $raw = '' }
+        $manual = "Add these to $path by hand:`n" + (Get-Content $snippetPath -Raw)
+        if (Test-JsonHasComment $raw) {
+            Write-Step SKIP 'VS Code' 'settings.json has comments; not rewriting it (see warning)'
+            Write-Warning $manual
+            return
+        }
+        try {
+            $before = if ($raw.Trim()) { $raw | ConvertFrom-Json -AsHashtable } else { [ordered]@{} }
+            $settings = if ($raw.Trim()) { $raw | ConvertFrom-Json -AsHashtable } else { [ordered]@{} }
+        }
+        catch {
+            Write-Step FAIL 'VS Code' 'could not parse settings.json (see warning)'
+            Write-Warning $manual
+            return
+        }
+        $snippet = Get-Content $snippetPath -Raw | ConvertFrom-Json -AsHashtable
+        $current = ConvertTo-Json $before -Depth 32
+        $merged = ConvertTo-Json (Merge-Dictionary $settings $snippet) -Depth 32
+        if ($merged -eq $current) { Write-Step SKIP 'VS Code' "up to date: $path"; return }
+        if ($DryRun) { Write-Step DRY 'VS Code' "would merge into $path"; return }
+        $note = Backup-File $path
+        Write-Utf8File $path $merged -NoBom
+        Write-Step OK 'VS Code' ("merged into $path $note").Trim()
+    }
+
     function Invoke-ConfigureSteps([string]$Root) {
         Write-Header 'PowerShell 7'
         Install-TerminalIcons
@@ -391,6 +443,9 @@ function Invoke-TerminalSetup {
 
         Write-Header 'Windows Terminal'
         Set-TerminalSettings $Root
+
+        Write-Header 'VS Code'
+        Set-VSCodeSettings $Root
     }
 
     # From Windows PowerShell 5.1: run the configure stage in pwsh 7 and
