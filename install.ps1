@@ -249,8 +249,11 @@ function Invoke-TerminalSetup {
         if ($SkipFonts) { Write-Step SKIP 'Nerd Font' '-SkipFonts'; return }
         if (Test-FontInstalled $FontFamily) { Write-Step SKIP 'Nerd Font' "'$FontFamily' already installed"; return }
         if (-not (Test-Command 'oh-my-posh')) { Write-Step FAIL 'Nerd Font' 'oh-my-posh not found'; return }
-        if ($DryRun) { Write-Step DRY 'Nerd Font' "would run: oh-my-posh font install $FontName --user"; return }
-        oh-my-posh font install $FontName --user
+        # Older oh-my-posh needs --user; newer releases dropped the flag and always install per user
+        $fontArgs = @('font', 'install', $FontName)
+        if ((oh-my-posh font install --help 2>&1 | Out-String) -match '--user') { $fontArgs += '--user' }
+        if ($DryRun) { Write-Step DRY 'Nerd Font' "would run: oh-my-posh $($fontArgs -join ' ')"; return }
+        oh-my-posh @fontArgs
         if ($LASTEXITCODE -eq 0) { Write-Step OK 'Nerd Font' "$FontName installed for current user" }
         else { Write-Step FAIL 'Nerd Font' "oh-my-posh exit code $LASTEXITCODE" }
     }

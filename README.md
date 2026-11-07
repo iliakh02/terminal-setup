@@ -18,7 +18,7 @@ Restart Windows Terminal when it finishes.
 |---|---|
 | Packages | Installs via winget (skipped if already present): PowerShell 7, Windows Terminal, oh-my-posh, Git |
 | Repository | Clones this repo to `~\terminal-setup` (or downloads the zip if Git is missing), pulls on later runs |
-| Font | `oh-my-posh font install CascadiaCode --user` (family names: `CaskaydiaCove NF` / `CaskaydiaCove NFM`) |
+| Font | `oh-my-posh font install CascadiaCode`, per user (family names: `CaskaydiaCove NF` / `CaskaydiaCove NFM`) |
 | Terminal-Icons | Installs the module for PowerShell 7, current user |
 | Profile | Turns the pwsh profile into a small loader that dot-sources [`powershell/Microsoft.PowerShell_profile.ps1`](powershell/Microsoft.PowerShell_profile.ps1) from the repo |
 | Windows Terminal | Merges [`windows-terminal/settings.overlay.json`](windows-terminal/settings.overlay.json) into the existing `settings.json` |
