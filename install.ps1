@@ -245,17 +245,75 @@ function Invoke-TerminalSetup {
         return $RepoDir
     }
 
+    # Per-user install from the official Nerd Fonts release; returns the number of font files.
+    # Folder and registry key are parameters so the logic can be tested in a sandbox.
+    function Install-NerdFontFromRelease {
+        param(
+            [string]$FontsDir = (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts'),
+            [string]$RegistryPath = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Fonts'
+        )
+        $url = "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/$FontName.zip"
+        $zip = Join-Path ([IO.Path]::GetTempPath()) "nerd-font-$([guid]::NewGuid().ToString('N')).zip"
+        $tmp = $zip -replace '\.zip$', ''
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+            Expand-Archive -Path $zip -DestinationPath $tmp -Force
+            $files = @(Get-ChildItem $tmp -Recurse -Filter '*.ttf')
+            if (-not $files) { throw "no .ttf files in $url" }
+            if (-not (Test-Path $FontsDir)) { $null = New-Item -ItemType Directory -Path $FontsDir -Force }
+            if (-not (Test-Path $RegistryPath)) { $null = New-Item -Path $RegistryPath -Force }
+            if (-not ('TerminalSetup.FontApi' -as [type])) {
+                Add-Type -Namespace TerminalSetup -Name FontApi -MemberDefinition @'
+[DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
+public static extern int AddFontResource(string lpFileName);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, UIntPtr wParam, IntPtr lParam, uint flags, uint timeout, out UIntPtr result);
+'@
+            }
+            foreach ($f in $files) {
+                $dest = Join-Path $FontsDir $f.Name
+                # A font already in use is locked; keep the existing copy
+                if (-not (Test-Path $dest)) { Copy-Item -LiteralPath $f.FullName -Destination $dest }
+                Set-ItemProperty -Path $RegistryPath -Name "$($f.BaseName) (TrueType)" -Value $dest
+                # Make the font usable without signing out
+                $null = [TerminalSetup.FontApi]::AddFontResource($dest)
+            }
+            # HWND_BROADCAST, WM_FONTCHANGE, SMTO_ABORTIFHUNG
+            $r = [UIntPtr]::Zero
+            $null = [TerminalSetup.FontApi]::SendMessageTimeout([IntPtr]0xffff, 0x1D, [UIntPtr]::Zero, [IntPtr]::Zero, 2, 1000, [ref]$r)
+            return $files.Count
+        }
+        finally {
+            Remove-Item $zip, $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     function Install-NerdFont {
         if ($SkipFonts) { Write-Step SKIP 'Nerd Font' '-SkipFonts'; return }
         if (Test-FontInstalled $FontFamily) { Write-Step SKIP 'Nerd Font' "'$FontFamily' already installed"; return }
-        if (-not (Test-Command 'oh-my-posh')) { Write-Step FAIL 'Nerd Font' 'oh-my-posh not found'; return }
-        # Older oh-my-posh needs --user; newer releases dropped the flag and always install per user
-        $fontArgs = @('font', 'install', $FontName)
-        if ((oh-my-posh font install --help 2>&1 | Out-String) -match '--user') { $fontArgs += '--user' }
-        if ($DryRun) { Write-Step DRY 'Nerd Font' "would run: oh-my-posh $($fontArgs -join ' ')"; return }
-        oh-my-posh @fontArgs
-        if ($LASTEXITCODE -eq 0) { Write-Step OK 'Nerd Font' "$FontName installed for current user" }
-        else { Write-Step FAIL 'Nerd Font' "oh-my-posh exit code $LASTEXITCODE" }
+        $hasPosh = Test-Command 'oh-my-posh'
+        if ($hasPosh) {
+            # Older oh-my-posh needs --user; newer releases dropped the flag and always install per user
+            $fontArgs = @('font', 'install', $FontName)
+            if ((oh-my-posh font install --help 2>&1 | Out-String) -match '--user') { $fontArgs += '--user' }
+        }
+        if ($DryRun) {
+            $how = if ($hasPosh) { "oh-my-posh $($fontArgs -join ' ')" } else { 'Nerd Fonts release download' }
+            Write-Step DRY 'Nerd Font' "would install via $how"
+            return
+        }
+        if ($hasPosh) {
+            oh-my-posh @fontArgs
+            if ($LASTEXITCODE -eq 0) { Write-Step OK 'Nerd Font' "$FontName installed via oh-my-posh"; return }
+            Write-Warning "oh-my-posh font install failed (exit code $LASTEXITCODE); downloading from the Nerd Fonts release instead."
+        }
+        try {
+            $count = Install-NerdFontFromRelease
+            Write-Step OK 'Nerd Font' "$FontName installed from Nerd Fonts release ($count files, current user)"
+        }
+        catch {
+            Write-Step FAIL 'Nerd Font' "download from Nerd Fonts release failed: $($_.Exception.Message)"
+        }
     }
 
     # --- Configure steps (pwsh 7 only) ---------------------------------------
